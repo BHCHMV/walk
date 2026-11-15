@@ -23,6 +23,10 @@ button{font:inherit;color:inherit;cursor:pointer}
 button:focus-visible{outline:3px solid var(--signal);outline-offset:2px}
 
 #map{position:fixed;inset:0;bottom:var(--panel-h,300px);z-index:1;background:#dfe5e9}
+.layers{position:fixed;z-index:5;left:12px;bottom:calc(var(--panel-h,300px) + 22px);width:64px;padding:3px 3px 4px;border:none;border-radius:10px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);font-size:11px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:3px}
+.layers .thumb{width:58px;height:46px;border-radius:7px;background-size:cover}
+.layers .thumb.sat{background:linear-gradient(135deg,#3d5a3a 0%,#58704a 35%,#8a8a6a 55%,#4a6440 80%);}
+.layers .thumb.street{background:linear-gradient(90deg,transparent 46%,#fff 46%,#fff 54%,transparent 54%),linear-gradient(0deg,transparent 40%,#fbd570 40%,#fbd570 50%,transparent 50%),#e8eaed}
 .leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.7)!important}
 
 /* top-left tool buttons */
@@ -98,7 +102,7 @@ label.f input:focus{outline:none;border-color:var(--ink)}
 .toast{position:fixed;z-index:30;left:50%;top:calc(68px + env(safe-area-inset-top));transform:translate(-50%,-20px);opacity:0;background:var(--ink);color:#fff;padding:10px 16px;border-radius:22px;font-size:14px;transition:.2s;pointer-events:none;max-width:90vw;text-align:center}
 .toast.on{opacity:1;transform:translate(-50%,0)}
 
-.me{width:18px;height:18px;border-radius:50%;background:var(--signal);border:3px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.15),0 0 0 8px rgba(255,90,31,.18)}
+.me{width:18px;height:18px;border-radius:50%;background:#4285F4;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
 .pin{width:14px;height:14px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.2)}
 .km{background:#fff;border:2px solid var(--ink);border-radius:11px;font:600 12px/18px Barlow;text-align:center;color:var(--ink);width:22px;height:22px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -114,6 +118,7 @@ label.f input:focus{outline:none;border-color:var(--ink)}
   <button class="tool" id="setBtn" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg></button>
 </div>
 
+<button class="layers" id="layers" aria-label="Switch to satellite"><span class="thumb sat"></span><span id="layersTxt">Satellite</span></button>
 <div class="panel" id="panel">
   <div class="time" id="time">0:00<small id="state">Ready</small></div>
   <div class="stats">
@@ -151,11 +156,21 @@ let W=null, state='idle', lastTick=0, timer=null, watchId=null, lastFix=null, wa
 const mapMissing=typeof L==='undefined';
 if(mapMissing){const n=new Proxy(function(){},{get:(t,k)=>k==='then'?undefined:n,apply:()=>n});window.L=n}
 const map=L.map('map',{zoomControl:false,attributionControl:true}).setView([50.0755,14.4378],15);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{
-  maxZoom:20,subdomains:'abcd',attribution:'© OpenStreetMap © CARTO'}).addTo(map);
+const ESRI='https://server.arcgisonline.com/ArcGIS/rest/services/';
+const streetLayer=L.tileLayer(ESRI+'World_Street_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:19,attribution:'Tiles © Esri, HERE, Garmin, OpenStreetMap'});
+const satLayer=L.layerGroup([
+  L.tileLayer(ESRI+'World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:19,attribution:'Imagery © Esri, Maxar'}),
+  L.tileLayer(ESRI+'Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:19,opacity:.8}),
+  L.tileLayer(ESRI+'Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:19})
+]);
+let satOn=false;streetLayer.addTo(map);
 const meIcon=L.divIcon({className:'',html:'<div class="me"></div>',iconSize:[18,18],iconAnchor:[9,9]});
 let meMarker=null, accCircle=null, routeLayer=L.layerGroup().addTo(map), viewLayer=L.layerGroup().addTo(map);
 map.on('dragstart',()=>{follow=false;$('follow').classList.remove('on')});
+$('layers').onclick=()=>{satOn=!satOn;
+  if(satOn){map.removeLayer(streetLayer);satLayer.addTo(map)}else{map.removeLayer(satLayer);streetLayer.addTo(map)}
+  $('layersTxt').textContent=satOn?'Map':'Satellite';$('layers').querySelector('.thumb').className='thumb '+(satOn?'street':'sat');
+  $('layers').setAttribute('aria-label',satOn?'Switch to map':'Switch to satellite')};
 $('follow').onclick=()=>{follow=true;$('follow').classList.add('on');if(lastFix)map.setView([lastFix.lat,lastFix.lng],Math.max(map.getZoom(),16))};
 
 function setPanelHeight(){document.documentElement.style.setProperty('--panel-h',$('panel').offsetHeight+'px');map.invalidateSize()}
@@ -195,7 +210,7 @@ function onFix(p){
   const {latitude:lat,longitude:lng,accuracy:acc}=p.coords;const t=p.timestamp||Date.now();
   gpsStatus(acc);
   const first=!lastFix;lastFix={lat,lng,acc,t};
-  if(!meMarker){meMarker=L.marker([lat,lng],{icon:meIcon,interactive:false,zIndexOffset:1000}).addTo(map);accCircle=L.circle([lat,lng],{radius:acc,color:'#FF5A1F',weight:0,fillOpacity:.08,interactive:false}).addTo(map)}
+  if(!meMarker){meMarker=L.marker([lat,lng],{icon:meIcon,interactive:false,zIndexOffset:1000}).addTo(map);accCircle=L.circle([lat,lng],{radius:acc,color:'#4285F4',weight:1,opacity:.3,fillOpacity:.12,interactive:false}).addTo(map)}
   else{meMarker.setLatLng([lat,lng]);accCircle.setLatLng([lat,lng]).setRadius(acc)}
   if(first)map.setView([lat,lng],17);else if(follow)map.panTo([lat,lng],{animate:true});
   if(state!=='running')return;
@@ -231,8 +246,8 @@ async function startMotion(){
 function drawRoute(){
   routeLayer.clearLayers();if(!W)return;
   W.segments.forEach(s=>{if(s.length>1){
-    L.polyline(s.map(p=>[p[0],p[1]]),{color:'#fff',weight:9,opacity:.9,lineCap:'round',lineJoin:'round'}).addTo(routeLayer);
-    L.polyline(s.map(p=>[p[0],p[1]]),{color:'#FF5A1F',weight:5,lineCap:'round',lineJoin:'round'}).addTo(routeLayer)}});
+    L.polyline(s.map(p=>[p[0],p[1]]),{color:'#0B57D0',weight:9,opacity:.9,lineCap:'round',lineJoin:'round'}).addTo(routeLayer);
+    L.polyline(s.map(p=>[p[0],p[1]]),{color:'#1A73E8',weight:6,lineCap:'round',lineJoin:'round'}).addTo(routeLayer)}});
   const f=W.segments.find(s=>s.length);if(f)L.marker([f[0][0],f[0][1]],{icon:L.divIcon({className:'',html:'<div class="pin" style="background:#2F6B45"></div>',iconSize:[14,14],iconAnchor:[7,7]}),interactive:false}).addTo(routeLayer);
   (W.kms||[]).forEach(k=>L.marker([k[0],k[1]],{icon:L.divIcon({className:'',html:`<div class="km">${k[2]}</div>`,iconSize:[22,22],iconAnchor:[11,11]}),interactive:false}).addTo(routeLayer));
 }
@@ -307,7 +322,7 @@ function miniRoute(w){
   let a=Infinity,b=-Infinity,c=Infinity,d=-Infinity;pts.forEach(p=>{a=Math.min(a,p[0]);b=Math.max(b,p[0]);c=Math.min(c,p[1]);d=Math.max(d,p[1])});
   const k=Math.cos(a*Math.PI/180),sx=(d-c)*k||1e-9,sy=(b-a)||1e-9,s=46/Math.max(sx,sy),ox=(58-sx*s)/2,oy=(58-sy*s)/2;
   const path=w.segments.filter(g=>g.length>1).map(g=>'M'+g.map(p=>((p[1]-c)*k*s+ox).toFixed(1)+','+(58-((p[0]-a)*s+oy)).toFixed(1)).join('L')).join('');
-  return `<svg viewBox="0 0 58 58"><path d="${path}" fill="none" stroke="#FF5A1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  return `<svg viewBox="0 0 58 58"><path d="${path}" fill="none" stroke="#1A73E8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 function niceDate(t){const d=new Date(t),n=new Date();const sameDay=d.toDateString()===n.toDateString();
   const y=new Date(n);y.setDate(n.getDate()-1);
@@ -324,7 +339,7 @@ $('histBtn').onclick=()=>{
 function showWalk(w){
   viewLayer.clearLayers();if(!W)routeLayer.clearLayers();
   const all=[];w.segments.forEach(s=>{if(s.length>1){const ll=s.map(p=>[p[0],p[1]]);all.push(...ll);
-    L.polyline(ll,{color:'#fff',weight:9,opacity:.9}).addTo(viewLayer);L.polyline(ll,{color:'#FF5A1F',weight:5,lineCap:'round',lineJoin:'round'}).addTo(viewLayer)}});
+    L.polyline(ll,{color:'#0B57D0',weight:9,opacity:.9,lineCap:'round',lineJoin:'round'}).addTo(viewLayer);L.polyline(ll,{color:'#1A73E8',weight:6,lineCap:'round',lineJoin:'round'}).addTo(viewLayer)}});
   (w.kms||[]).forEach(k=>L.marker([k[0],k[1]],{icon:L.divIcon({className:'',html:`<div class="km">${k[2]}</div>`,iconSize:[22,22],iconAnchor:[11,11]})}).addTo(viewLayer));
   if(all.length){follow=false;$('follow').classList.remove('on');map.fitBounds(L.latLngBounds(all),{padding:[40,40]})}
   const sp=(w.splits||[]).map((t,i,a)=>t-(a[i-1]||0));const mx=Math.max(...sp,1);
