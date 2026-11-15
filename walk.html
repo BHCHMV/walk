@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#EEF1F3">
+<title>Walk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{
+  --fog:#EEF1F3;      /* panel */
+  --ink:#1A2B3C;      /* text */
+  --slate:#5E6E7D;    /* secondary text */
+  --rule:#C9D2DA;     /* dividers */
+  --signal:#FF5A1F;   /* route + main action */
+  --moss:#2F6B45;     /* resume / good GPS */
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--fog);color:var(--ink);font:16px/1.45 Barlow,system-ui,sans-serif}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible{outline:3px solid var(--signal);outline-offset:2px}
+
+#map{position:fixed;inset:0;bottom:var(--panel-h,300px);z-index:1;background:#dfe5e9}
+.leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.7)!important}
+
+/* top-left tool buttons */
+.tools{position:fixed;z-index:5;top:calc(12px + env(safe-area-inset-top));right:12px;display:flex;flex-direction:column;gap:8px}
+.tool{width:46px;height:46px;border-radius:50%;border:none;background:#fff;box-shadow:0 1px 0 var(--rule),0 2px 10px rgba(26,43,60,.18);display:grid;place-items:center}
+.tool svg{width:22px;height:22px}
+.tool.on{background:var(--ink);color:#fff}
+
+.gps{position:fixed;z-index:5;top:calc(12px + env(safe-area-inset-top));left:12px;background:#fff;border-radius:23px;padding:0 14px 0 10px;height:46px;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500;box-shadow:0 1px 0 var(--rule),0 2px 10px rgba(26,43,60,.18)}
+.gps i{width:10px;height:10px;border-radius:50%;background:#b8c2cb}
+.gps.good i{background:var(--moss)}
+.gps.weak i{background:#E3A008}
+.gps.bad i{background:#C2362B}
+
+/* panel */
+.panel{position:fixed;z-index:4;left:0;right:0;bottom:0;background:var(--fog);padding:14px 20px calc(16px + env(safe-area-inset-bottom));border-top:1px solid var(--rule)}
+.time{font-family:"Barlow Condensed",sans-serif;font-weight:600;font-size:76px;line-height:.9;letter-spacing:-1px;font-variant-numeric:tabular-nums}
+.time small{font-size:15px;font-family:Barlow,system-ui,sans-serif;font-weight:500;color:var(--slate);letter-spacing:0;margin-left:8px;vertical-align:middle}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);margin:12px 0 14px;border-top:1px solid var(--rule)}
+.stat{padding:10px 0 2px;border-left:1px solid var(--rule);padding-left:12px}
+.stat:first-child{border-left:none;padding-left:0}
+.stat b{display:block;font-family:"Barlow Condensed",sans-serif;font-weight:600;font-size:34px;line-height:1;font-variant-numeric:tabular-nums}
+.stat span{font-size:13px;color:var(--slate)}
+.sub{display:flex;gap:18px;font-size:14px;color:var(--slate);margin-top:-4px;margin-bottom:14px;flex-wrap:wrap}
+.sub b{color:var(--ink);font-weight:600}
+
+.controls{display:flex;gap:10px;align-items:center}
+.go{flex:1;height:60px;border:none;border-radius:30px;background:var(--signal);color:#fff;font-size:19px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:10px}
+.go.paused{background:var(--moss)}
+.go.running{background:var(--ink)}
+.go svg{width:20px;height:20px}
+.side{height:60px;padding:0 22px;border-radius:30px;border:1.5px solid var(--ink);background:transparent;font-weight:600;font-size:16px}
+.side[hidden]{display:none}
+
+/* sheets */
+.scrim{position:fixed;inset:0;z-index:20;background:rgba(26,43,60,.4);opacity:0;pointer-events:none;transition:opacity .2s}
+.scrim.on{opacity:1;pointer-events:auto}
+.sheet{position:fixed;z-index:21;left:0;right:0;bottom:0;max-height:86vh;overflow:auto;background:#fff;border-radius:20px 20px 0 0;padding:20px 20px calc(20px + env(safe-area-inset-bottom));transform:translateY(102%);transition:transform .25s ease}
+.sheet.on{transform:none}
+.sheet h2{font-family:"Barlow Condensed",sans-serif;font-weight:600;font-size:30px;margin:0 0 4px;line-height:1.1}
+.sheet p{margin:0 0 16px;color:var(--slate)}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.btn{height:52px;border-radius:26px;border:1.5px solid var(--ink);background:#fff;font-weight:600}
+.btn.fill{background:var(--signal);border-color:var(--signal);color:#fff}
+.btn.quiet{border-color:var(--rule);color:var(--slate)}
+label.f{display:block;margin-bottom:14px;font-size:14px;color:var(--slate)}
+label.f input{display:block;width:100%;margin-top:6px;height:50px;border:1.5px solid var(--rule);border-radius:12px;padding:0 14px;font:inherit;font-size:18px;color:var(--ink)}
+label.f input:focus{outline:none;border-color:var(--ink)}
+
+.walks{list-style:none;margin:0 0 16px;padding:0}
+.walks li{display:flex;gap:14px;align-items:center;padding:12px 0;border-top:1px solid var(--rule)}
+.walks li:first-child{border-top:none}
+.walks svg{flex:none;width:58px;height:58px;background:var(--fog);border-radius:10px}
+.walks .t{flex:1;min-width:0}
+.walks .t b{display:block;font-weight:600}
+.walks .t span{font-size:14px;color:var(--slate)}
+.walks .d{font-family:"Barlow Condensed",sans-serif;font-size:26px;font-weight:600}
+.empty{padding:24px 0;color:var(--slate);text-align:center}
+
+.splits{width:100%;border-collapse:collapse;margin:8px 0 16px;font-variant-numeric:tabular-nums}
+.splits td{padding:8px 0;border-top:1px solid var(--rule)}
+.splits td:last-child{text-align:right}
+.splits .barc{width:50%}
+.splits .bar{height:8px;background:var(--signal);border-radius:4px}
+
+.summary{display:grid;grid-template-columns:1fr 1fr;gap:0;margin-bottom:16px;border-top:1px solid var(--rule)}
+.summary div{padding:10px 0;border-bottom:1px solid var(--rule)}
+.summary div:nth-child(odd){padding-right:10px;border-right:1px solid var(--rule)}
+.summary div:nth-child(even){padding-left:14px}
+.summary b{display:block;font-family:"Barlow Condensed",sans-serif;font-size:30px;font-weight:600;line-height:1.05}
+.summary span{font-size:13px;color:var(--slate)}
+
+.toast{position:fixed;z-index:30;left:50%;top:calc(68px + env(safe-area-inset-top));transform:translate(-50%,-20px);opacity:0;background:var(--ink);color:#fff;padding:10px 16px;border-radius:22px;font-size:14px;transition:.2s;pointer-events:none;max-width:90vw;text-align:center}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+.me{width:18px;height:18px;border-radius:50%;background:var(--signal);border:3px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.15),0 0 0 8px rgba(255,90,31,.18)}
+.pin{width:14px;height:14px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.2)}
+.km{background:#fff;border:2px solid var(--ink);border-radius:11px;font:600 12px/18px Barlow;text-align:center;color:var(--ink);width:22px;height:22px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="gps" id="gps"><i></i><span id="gpsTxt">Finding you…</span></div>
+<div class="tools">
+  <button class="tool on" id="follow" aria-label="Follow my position"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/></svg></button>
+  <button class="tool" id="histBtn" aria-label="Past walks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+  <button class="tool" id="setBtn" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg></button>
+</div>
+
+<div class="panel" id="panel">
+  <div class="time" id="time">0:00<small id="state">Ready</small></div>
+  <div class="stats">
+    <div class="stat"><b id="dist">0.00</b><span>km</span></div>
+    <div class="stat"><b id="steps">0</b><span id="stepsLbl">steps</span></div>
+    <div class="stat"><b id="pace">–:––</b><span>min/km</span></div>
+  </div>
+  <div class="sub">
+    <span><b id="kcal">0</b> kcal</span>
+    <span><b id="speed">0.0</b> km/h</span>
+    <span><b id="cad">0</b> steps/min</span>
+  </div>
+  <div class="controls">
+    <button class="go" id="go"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg><span>Start walk</span></button>
+    <button class="side" id="finish" hidden>Finish</button>
+  </div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet"></div>
+<div class="toast" id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const store={get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+
+let prefs=store.get('walk-prefs',{height:175,weight:70});
+let walks=store.get('walk-history',[]);
+// walk: {id,start,segments:[[ [lat,lng,t], ...]], moving(ms), steps, sensorSteps(bool), dist(m)}
+let W=null, state='idle', lastTick=0, timer=null, watchId=null, lastFix=null, wakeLock=null, follow=true;
+
+// ---------- map ----------
+// If the map library can't load (no internet), keep tracking working without the map.
+const mapMissing=typeof L==='undefined';
+if(mapMissing){const n=new Proxy(function(){},{get:(t,k)=>k==='then'?undefined:n,apply:()=>n});window.L=n}
+const map=L.map('map',{zoomControl:false,attributionControl:true}).setView([50.0755,14.4378],15);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{
+  maxZoom:20,subdomains:'abcd',attribution:'© OpenStreetMap © CARTO'}).addTo(map);
+const meIcon=L.divIcon({className:'',html:'<div class="me"></div>',iconSize:[18,18],iconAnchor:[9,9]});
+let meMarker=null, accCircle=null, routeLayer=L.layerGroup().addTo(map), viewLayer=L.layerGroup().addTo(map);
+map.on('dragstart',()=>{follow=false;$('follow').classList.remove('on')});
+$('follow').onclick=()=>{follow=true;$('follow').classList.add('on');if(lastFix)map.setView([lastFix.lat,lastFix.lng],Math.max(map.getZoom(),16))};
+
+function setPanelHeight(){document.documentElement.style.setProperty('--panel-h',$('panel').offsetHeight+'px');map.invalidateSize()}
+window.addEventListener('resize',setPanelHeight);
+
+// ---------- helpers ----------
+function hav(a,b){const R=6371000,r=Math.PI/180,dLa=(b[0]-a[0])*r,dLo=(b[1]-a[1])*r;
+  const x=Math.sin(dLa/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(x))}
+const stride=()=>prefs.height*0.415/100; // metres
+function clock(ms){const s=Math.floor(ms/1000),h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
+  return h?`${h}:${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}`:`${m}:${String(x).padStart(2,'0')}`}
+function paceStr(msPerKm){if(!isFinite(msPerKm)||msPerKm<=0||msPerKm>3600000)return '–:––';const s=Math.round(msPerKm/1000);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+function kcal(distM,ms){ // walking MET scaled by speed
+  const kmh=ms?distM/1000/(ms/3600000):0;const met=kmh<3.2?2.8:kmh<4.8?3.5:kmh<5.6?4.3:kmh<6.4?5:kmh<8?7:9;
+  return met*prefs.weight*(ms/3600000)}
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('on'),2400)}
+function stepsOf(w){return w.sensorSteps?w.steps:Math.round(w.dist/stride())}
+
+// ---------- sheet ----------
+function openSheet(html,mount){$('sheet').innerHTML=html;$('scrim').classList.add('on');$('sheet').classList.add('on');mount&&mount()}
+function closeSheet(){$('scrim').classList.remove('on');$('sheet').classList.remove('on')}
+$('scrim').onclick=closeSheet;
+
+// ---------- GPS ----------
+function gpsStatus(acc){const g=$('gps');g.className='gps '+(acc==null?'':acc<=15?'good':acc<=35?'weak':'bad');
+  $('gpsTxt').textContent=acc==null?'Finding you…':`GPS ±${Math.round(acc)} m`}
+function startWatch(){
+  if(!('geolocation' in navigator)){$('gpsTxt').textContent='No GPS in this browser';return}
+  if(watchId!=null)return;
+  watchId=navigator.geolocation.watchPosition(onFix,err=>{
+    const g=$('gps');g.className='gps bad';
+    $('gpsTxt').textContent=err.code===1?'Location blocked':'No GPS signal';
+    if(err.code===1)openSheet(`<h2>Location is off</h2><p>Allow location for this page in your browser settings, then reload. If you opened the file straight from Downloads and it still won't ask, the browser may block GPS for local files — open it from a web address instead.</p><button class="btn fill" style="width:100%" onclick="closeSheet()">OK</button>`);
+  },{enableHighAccuracy:true,maximumAge:0,timeout:20000});
+}
+function onFix(p){
+  const {latitude:lat,longitude:lng,accuracy:acc}=p.coords;const t=p.timestamp||Date.now();
+  gpsStatus(acc);
+  const first=!lastFix;lastFix={lat,lng,acc,t};
+  if(!meMarker){meMarker=L.marker([lat,lng],{icon:meIcon,interactive:false,zIndexOffset:1000}).addTo(map);accCircle=L.circle([lat,lng],{radius:acc,color:'#FF5A1F',weight:0,fillOpacity:.08,interactive:false}).addTo(map)}
+  else{meMarker.setLatLng([lat,lng]);accCircle.setLatLng([lat,lng]).setRadius(acc)}
+  if(first)map.setView([lat,lng],17);else if(follow)map.panTo([lat,lng],{animate:true});
+  if(state!=='running')return;
+  if(acc>35)return; // too vague to trust
+  const seg=W.segments[W.segments.length-1];const pt=[+lat.toFixed(6),+lng.toFixed(6),t];
+  if(!seg.length){seg.push(pt);drawRoute();save();return}
+  const prev=seg[seg.length-1];const d=hav(prev,pt);const dt=(t-prev[2])/1000;
+  if(d<Math.max(3,acc*0.4))return;           // jitter while standing still
+  if(dt>0&&d/dt>12)return;                   // impossible jump (>43 km/h)
+  const before=W.dist;W.dist+=d;seg.push(pt);
+  if(Math.floor(W.dist/1000)>Math.floor(before/1000))markKm(pt,Math.floor(W.dist/1000));
+  drawRoute();save();
+}
+
+// ---------- step sensor ----------
+let motionOn=false,lastStep=0,smooth=0,above=false,recent=[];
+function onMotion(e){
+  const a=e.accelerationIncludingGravity;if(!a||a.x==null)return;
+  const mag=Math.sqrt(a.x*a.x+a.y*a.y+a.z*a.z);
+  smooth=smooth?smooth*0.8+mag*0.2:mag;
+  const base=9.81, now=performance.now();
+  if(!above&&smooth>base+1.2&&now-lastStep>280){above=true;lastStep=now;
+    if(state==='running'&&W){W.steps++;W.sensorSteps=true;recent.push(Date.now())}}
+  else if(above&&smooth<base+0.3)above=false;
+}
+async function startMotion(){
+  if(motionOn||!('DeviceMotionEvent' in window))return;
+  try{if(typeof DeviceMotionEvent.requestPermission==='function'){const r=await DeviceMotionEvent.requestPermission();if(r!=='granted')return}
+    window.addEventListener('devicemotion',onMotion);motionOn=true}catch(e){}
+}
+
+// ---------- drawing ----------
+function drawRoute(){
+  routeLayer.clearLayers();if(!W)return;
+  W.segments.forEach(s=>{if(s.length>1){
+    L.polyline(s.map(p=>[p[0],p[1]]),{color:'#fff',weight:9,opacity:.9,lineCap:'round',lineJoin:'round'}).addTo(routeLayer);
+    L.polyline(s.map(p=>[p[0],p[1]]),{color:'#FF5A1F',weight:5,lineCap:'round',lineJoin:'round'}).addTo(routeLayer)}});
+  const f=W.segments.find(s=>s.length);if(f)L.marker([f[0][0],f[0][1]],{icon:L.divIcon({className:'',html:'<div class="pin" style="background:#2F6B45"></div>',iconSize:[14,14],iconAnchor:[7,7]}),interactive:false}).addTo(routeLayer);
+  (W.kms||[]).forEach(k=>L.marker([k[0],k[1]],{icon:L.divIcon({className:'',html:`<div class="km">${k[2]}</div>`,iconSize:[22,22],iconAnchor:[11,11]}),interactive:false}).addTo(routeLayer));
+}
+function markKm(pt,n){W.kms=W.kms||[];W.kms.push([pt[0],pt[1],n]);W.splits=W.splits||[];W.splits.push(W.moving)}
+
+// ---------- stats ----------
+function render(){
+  const w=W||{moving:0,dist:0,steps:0};
+  const ms=w.moving+(state==='running'?Date.now()-lastTick:0);
+  $('time').firstChild.nodeValue=clock(ms);
+  $('state').textContent={idle:'Ready',running:'Walking',paused:'Paused'}[state];
+  $('dist').textContent=(w.dist/1000).toFixed(2);
+  $('steps').textContent=W?stepsOf(W).toLocaleString():'0';
+  $('stepsLbl').textContent=W&&!W.sensorSteps&&W.dist>0?'steps (est.)':'steps';
+  $('pace').textContent=w.dist>50?paceStr(ms/(w.dist/1000)):'–:––';
+  $('kcal').textContent=Math.round(kcal(w.dist,ms));
+  $('speed').textContent=ms?(w.dist/1000/(ms/3600000)).toFixed(1):'0.0';
+  const now=Date.now();recent=recent.filter(t=>now-t<60000);
+  $('cad').textContent=W&&W.sensorSteps?recent.length:(ms&&w.dist?Math.round(w.dist/stride()/(ms/60000)):0);
+}
+function tick(){if(state==='running'){const n=Date.now();W.moving+=n-lastTick;lastTick=n}render()}
+
+// ---------- controls ----------
+const ICON_PLAY='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>';
+const ICON_PAUSE='<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1"/><rect x="14" y="4.5" width="4" height="15" rx="1"/></svg>';
+function setUI(){
+  const g=$('go');g.className='go '+(state==='running'?'running':state==='paused'?'paused':'');
+  g.innerHTML=state==='running'?ICON_PAUSE+'<span>Pause</span>':state==='paused'?ICON_PLAY+'<span>Resume</span>':ICON_PLAY+'<span>Start walk</span>';
+  $('finish').hidden=state==='idle';render();setPanelHeight();
+}
+async function keepAwake(on){
+  try{if(on&&'wakeLock' in navigator&&!wakeLock){wakeLock=await navigator.wakeLock.request('screen');wakeLock.addEventListener('release',()=>wakeLock=null)}
+    if(!on&&wakeLock){await wakeLock.release();wakeLock=null}}catch(e){}
+}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&state==='running')keepAwake(true)});
+
+$('go').onclick=async()=>{
+  if(state==='idle'){
+    await startMotion();startWatch();
+    W={id:Date.now(),start:Date.now(),segments:[[]],moving:0,steps:0,sensorSteps:false,dist:0,kms:[],splits:[]};
+    routeLayer.clearLayers();viewLayer.clearLayers();
+    if(lastFix&&lastFix.acc<=35)W.segments[0].push([lastFix.lat,lastFix.lng,Date.now()]);
+    state='running';lastTick=Date.now();keepAwake(true);toast('Walk started — keep the screen on');
+  }else if(state==='running'){
+    W.moving+=Date.now()-lastTick;state='paused';keepAwake(false);
+  }else{
+    W.segments.push([]);state='running';lastTick=Date.now();keepAwake(true);
+  }
+  save();setUI();
+};
+$('finish').onclick=()=>{
+  if(state==='running'){W.moving+=Date.now()-lastTick;state='paused';setUI()}
+  openSheet(`<h2>Finish this walk?</h2><p>${(W.dist/1000).toFixed(2)} km in ${clock(W.moving)}.</p>
+    <div class="row"><button class="btn quiet" id="fDiscard">Discard</button><button class="btn" id="fBack">Keep going</button></div>
+    <button class="btn fill" id="fSave" style="width:100%;margin-top:10px">Save walk</button>`,()=>{
+    $('fBack').onclick=closeSheet;
+    $('fDiscard').onclick=()=>{endWalk(false)};
+    $('fSave').onclick=()=>{endWalk(true)};
+  });
+};
+function endWalk(keep){
+  const done=W;W=null;state='idle';keepAwake(false);store.set('walk-current',null);
+  if(keep&&done){done.end=Date.now();walks.unshift(done);store.set('walk-history',walks);showWalk(done)}
+  else{closeSheet();routeLayer.clearLayers();toast('Walk discarded')}
+  setUI();
+}
+function save(){if(W)store.set('walk-current',{W,state:state==='running'?'paused':state})}
+
+// ---------- history ----------
+function miniRoute(w){
+  const pts=w.segments.flat();if(pts.length<2)return '<svg viewBox="0 0 58 58"></svg>';
+  let a=Infinity,b=-Infinity,c=Infinity,d=-Infinity;pts.forEach(p=>{a=Math.min(a,p[0]);b=Math.max(b,p[0]);c=Math.min(c,p[1]);d=Math.max(d,p[1])});
+  const k=Math.cos(a*Math.PI/180),sx=(d-c)*k||1e-9,sy=(b-a)||1e-9,s=46/Math.max(sx,sy),ox=(58-sx*s)/2,oy=(58-sy*s)/2;
+  const path=w.segments.filter(g=>g.length>1).map(g=>'M'+g.map(p=>((p[1]-c)*k*s+ox).toFixed(1)+','+(58-((p[0]-a)*s+oy)).toFixed(1)).join('L')).join('');
+  return `<svg viewBox="0 0 58 58"><path d="${path}" fill="none" stroke="#FF5A1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+function niceDate(t){const d=new Date(t),n=new Date();const sameDay=d.toDateString()===n.toDateString();
+  const y=new Date(n);y.setDate(n.getDate()-1);
+  const day=sameDay?'Today':d.toDateString()===y.toDateString()?'Yesterday':d.toLocaleDateString(undefined,{weekday:'short',day:'numeric',month:'short'});
+  return day+', '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}
+$('histBtn').onclick=()=>{
+  const total=walks.reduce((s,w)=>s+w.dist,0),wk=walks.filter(w=>Date.now()-w.start<7*864e5);
+  openSheet(`<h2>Your walks</h2><p>${walks.length?`${(total/1000).toFixed(1)} km all time. ${(wk.reduce((s,w)=>s+w.dist,0)/1000).toFixed(1)} km in the last 7 days.`:'Nothing saved yet.'}</p>
+  ${walks.length?`<ul class="walks">${walks.map((w,i)=>`<li data-i="${i}">${miniRoute(w)}<div class="t"><b>${niceDate(w.start)}</b><span>${clock(w.moving)} · ${stepsOf(w).toLocaleString()} steps</span></div><div class="d">${(w.dist/1000).toFixed(2)}</div></li>`).join('')}</ul>`:'<div class="empty">Start a walk and it will show up here with its route.</div>'}
+  <button class="btn" style="width:100%" onclick="closeSheet()">Close</button>`,()=>{
+    document.querySelectorAll('.walks li').forEach(li=>li.onclick=()=>showWalk(walks[+li.dataset.i]));
+  });
+};
+function showWalk(w){
+  viewLayer.clearLayers();if(!W)routeLayer.clearLayers();
+  const all=[];w.segments.forEach(s=>{if(s.length>1){const ll=s.map(p=>[p[0],p[1]]);all.push(...ll);
+    L.polyline(ll,{color:'#fff',weight:9,opacity:.9}).addTo(viewLayer);L.polyline(ll,{color:'#FF5A1F',weight:5,lineCap:'round',lineJoin:'round'}).addTo(viewLayer)}});
+  (w.kms||[]).forEach(k=>L.marker([k[0],k[1]],{icon:L.divIcon({className:'',html:`<div class="km">${k[2]}</div>`,iconSize:[22,22],iconAnchor:[11,11]})}).addTo(viewLayer));
+  if(all.length){follow=false;$('follow').classList.remove('on');map.fitBounds(L.latLngBounds(all),{padding:[40,40]})}
+  const sp=(w.splits||[]).map((t,i,a)=>t-(a[i-1]||0));const mx=Math.max(...sp,1);
+  openSheet(`<h2>${(w.dist/1000).toFixed(2)} km</h2><p>${niceDate(w.start)}</p>
+   <div class="summary">
+     <div><b>${clock(w.moving)}</b><span>moving time</span></div>
+     <div><b>${stepsOf(w).toLocaleString()}</b><span>${w.sensorSteps?'steps':'steps (estimated)'}</span></div>
+     <div><b>${w.dist>50?paceStr(w.moving/(w.dist/1000)):'–:––'}</b><span>avg pace, min/km</span></div>
+     <div><b>${Math.round(kcal(w.dist,w.moving))}</b><span>kcal</span></div>
+   </div>
+   ${sp.length?`<table class="splits">${sp.map((t,i)=>`<tr><td>Km ${i+1}</td><td class="barc"><div class="bar" style="width:${t/mx*100}%"></div></td><td>${paceStr(t)}</td></tr>`).join('')}</table>`:''}
+   <div class="row"><button class="btn quiet" id="wDel">Delete</button><button class="btn" id="wGpx">Save as GPX</button></div>
+   <button class="btn fill" style="width:100%;margin-top:10px" id="wClose">Show on map</button>`,()=>{
+    $('wClose').onclick=closeSheet;
+    if(window.Capacitor)$('wGpx').hidden=true; // downloads don't work inside the Android app
+    $('wGpx').onclick=()=>gpx(w);
+    $('wDel').onclick=()=>{walks=walks.filter(x=>x.id!==w.id);store.set('walk-history',walks);viewLayer.clearLayers();closeSheet();toast('Walk deleted')};
+  });
+}
+function gpx(w){
+  const segs=w.segments.filter(s=>s.length).map(s=>'<trkseg>'+s.map(p=>`<trkpt lat="${p[0]}" lon="${p[1]}"><time>${new Date(p[2]).toISOString()}</time></trkpt>`).join('')+'</trkseg>').join('');
+  const xml=`<?xml version="1.0" encoding="UTF-8"?><gpx version="1.1" creator="Walk" xmlns="http://www.topografix.com/GPX/1/1"><trk><name>Walk ${new Date(w.start).toISOString().slice(0,10)}</name><type>walking</type>${segs}</trk></gpx>`;
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([xml],{type:'application/gpx+xml'}));a.download=`walk-${new Date(w.start).toISOString().slice(0,10)}.gpx`;a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);toast('GPX saved to downloads');
+}
+
+// ---------- settings ----------
+$('setBtn').onclick=()=>openSheet(`<h2>About you</h2><p>Used to work out steps from distance and calories burned.</p>
+  <label class="f">Height in cm<input id="sH" type="number" inputmode="decimal" value="${prefs.height}"></label>
+  <label class="f">Weight in kg<input id="sW" type="number" inputmode="decimal" value="${prefs.weight}"></label>
+  <button class="btn fill" style="width:100%" id="sSave">Save</button>`,()=>{
+  $('sSave').onclick=()=>{prefs={height:+$('sH').value||175,weight:+$('sW').value||70};store.set('walk-prefs',prefs);closeSheet();render();toast('Saved')}});
+
+// ---------- boot ----------
+(function boot(){
+  const c=store.get('walk-current',null);
+  if(c&&c.W){W=c.W;state='paused';drawRoute();toast('Your unfinished walk is paused — tap Resume')}
+  setUI();startWatch();timer=setInterval(tick,1000);
+  if(mapMissing){$('map').innerHTML='<p style="padding:90px 70px;color:#5E6E7D;text-align:center">The map needs internet to load. Tracking, steps and distance still work.</p>'}
+  setTimeout(setPanelHeight,50);
+})();
+</script>
+</body>
+</html>
