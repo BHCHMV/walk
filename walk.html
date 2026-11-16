@@ -76,6 +76,11 @@ label.f{display:block;margin-bottom:14px;font-size:14px;color:var(--slate)}
 label.f input{display:block;width:100%;margin-top:6px;height:50px;border:1.5px solid var(--rule);border-radius:12px;padding:0 14px;font:inherit;font-size:18px;color:var(--ink)}
 label.f input:focus{outline:none;border-color:var(--ink)}
 
+.days{display:flex;align-items:flex-end;gap:6px;height:120px;margin:6px 0 4px}
+.days div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;font-size:11px;color:var(--slate)}
+.days i{display:block;width:100%;background:var(--rule);border-radius:5px 5px 2px 2px;min-height:3px}
+.days .today i{background:var(--signal)}
+.days b{font-size:11px;font-weight:600;color:var(--ink);margin-bottom:3px}
 .walks{list-style:none;margin:0 0 16px;padding:0}
 .walks li{display:flex;gap:14px;align-items:center;padding:12px 0;border-top:1px solid var(--rule)}
 .walks li:first-child{border-top:none}
@@ -115,6 +120,7 @@ label.f input:focus{outline:none;border-color:var(--ink)}
 <div class="tools">
   <button class="tool on" id="follow" aria-label="Follow my position"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/></svg></button>
   <button class="tool" id="histBtn" aria-label="Past walks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+  <button class="tool" id="fitBtn" aria-label="Google Fit data"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg></button>
   <button class="tool" id="setBtn" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg></button>
 </div>
 
@@ -127,6 +133,7 @@ label.f input:focus{outline:none;border-color:var(--ink)}
     <div class="stat"><b id="pace">–:––</b><span>min/km</span></div>
   </div>
   <div class="sub">
+    <span id="todayWrap" hidden>Today <b id="todaySteps">0</b> steps</span>
     <span><b id="kcal">0</b> kcal</span>
     <span><b id="speed">0.0</b> km/h</span>
     <span><b id="cad">0</b> steps/min</span>
@@ -342,6 +349,7 @@ $('finish').onclick=()=>{
 };
 function endWalk(keep){
   const done=W;W=null;state='idle';keepAwake(false);startWatch(false);store.set('walk-current',null);
+  setTimeout(refreshToday,5000);
   if(keep&&done){done.end=Date.now();walks.unshift(done);store.set('walk-history',walks);showWalk(done)}
   else{closeSheet();routeLayer.clearLayers();toast('Walk discarded')}
   setUI();
@@ -398,6 +406,57 @@ function gpx(w){
   setTimeout(()=>URL.revokeObjectURL(a.href),2000);toast('GPX saved to downloads');
 }
 
+// ---------- Google Fit data (read through Health Connect, Android app only) ----------
+const HEALTH=(()=>{try{const C=window.Capacitor;if(!C||!C.isNativePlatform||!C.isNativePlatform())return null;
+  return C.registerPlugin?C.registerPlugin('Health'):(C.Plugins&&C.Plugins.Health)||null}catch(e){return null}})();
+const HC_TYPES=['steps','distance','calories','workouts'];
+function midnight(daysAgo=0){const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()-daysAgo);return d}
+async function hcConnect(){
+  const a=await HEALTH.isAvailable();
+  if(!a.available)throw new Error('unavailable');
+  await HEALTH.requestAuthorization({read:HC_TYPES});
+  store.set('hc-ok',true);
+}
+async function hcDays(type,days){
+  const r=await HEALTH.queryAggregated({dataType:type,startDate:midnight(days-1).toISOString(),endDate:new Date().toISOString(),bucket:'day',aggregation:'sum'});
+  const out=[...Array(days)].map((_,i)=>({d:midnight(days-1-i),v:0}));
+  (r.samples||[]).forEach(x=>{const d=new Date(x.startDate);const i=out.findIndex(o=>o.d.toDateString()===d.toDateString());if(i>=0)out[i].v=x.value||0});
+  return out;
+}
+async function refreshToday(){
+  if(!HEALTH||!store.get('hc-ok',false))return;
+  try{const st=await hcDays('steps',1);$('todaySteps').textContent=Math.round(st[0].v).toLocaleString();$('todayWrap').hidden=false;setPanelHeight()}catch(e){}
+}
+const nice=t=>t.replace(/([A-Z])/g,' $1').replace(/^./,c=>c.toUpperCase());
+$('fitBtn').onclick=async()=>{
+  if(!HEALTH){openSheet(`<h2>Google Fit data</h2><p>This works in the Android app. It reads your Google Fit steps, distance and workouts through Health Connect.</p><button class="btn fill" style="width:100%" onclick="closeSheet()">OK</button>`);return}
+  openSheet(`<h2>Google Fit data</h2><p>Loading…</p>`);
+  try{
+    if(!store.get('hc-ok',false))await hcConnect();
+    const [st,di,ca]=await Promise.all([hcDays('steps',7),hcDays('distance',7),hcDays('calories',7)]);
+    const wk=await HEALTH.queryWorkouts({startDate:midnight(13).toISOString(),endDate:new Date().toISOString(),limit:15}).catch(()=>({workouts:[]}));
+    const t=st.length-1,mx=Math.max(...st.map(x=>x.v),1),week=st.reduce((a,b)=>a+b.v,0);
+    if(!week&&!(wk.workouts||[]).length){
+      openSheet(`<h2>No Google Fit data yet</h2><p>Walk is connected to Health Connect, but there's nothing in it. In the <b>Google Fit</b> app, open <b>Profile → Settings</b> and turn on syncing with <b>Health Connect</b>. Then come back here.</p>
+        <div class="row"><button class="btn" id="hcSet">Health Connect settings</button><button class="btn fill" onclick="closeSheet()">OK</button></div>`,()=>{$('hcSet').onclick=()=>HEALTH.openHealthConnectSettings()});return}
+    openSheet(`<h2>${Math.round(st[t].v).toLocaleString()} steps today</h2><p>From Google Fit, through Health Connect.</p>
+      <div class="summary">
+        <div><b>${(di[t].v/1000).toFixed(2)}</b><span>km today</span></div>
+        <div><b>${Math.round(ca[t].v)}</b><span>active kcal today</span></div>
+        <div><b>${Math.round(week).toLocaleString()}</b><span>steps in 7 days</span></div>
+        <div><b>${Math.round(week/7).toLocaleString()}</b><span>daily average</span></div>
+      </div>
+      <div class="days">${st.map((x,i)=>`<div class="${i===t?'today':''}"><b>${x.v>=1000?(x.v/1000).toFixed(1)+'k':Math.round(x.v)}</b><i style="height:${Math.max(3,x.v/mx*85)}%"></i>${i===t?'Today':x.d.toLocaleDateString(undefined,{weekday:'short'})}</div>`).join('')}</div>
+      ${(wk.workouts||[]).length?`<ul class="walks" style="margin-top:14px">${wk.workouts.map(w=>`<li><div class="t"><b>${nice(w.workoutType||'workout')}</b><span>${niceDate(new Date(w.startDate).getTime())} · ${clock(w.duration*1000)}${w.totalEnergyBurned?` · ${Math.round(w.totalEnergyBurned)} kcal`:''}</span></div><div class="d">${w.totalDistance?(w.totalDistance/1000).toFixed(2):''}</div></li>`).join('')}</ul>`:''}
+      <div class="row" style="margin-top:12px"><button class="btn" id="hcSet">Permissions</button><button class="btn fill" onclick="closeSheet()">Close</button></div>`,()=>{$('hcSet').onclick=()=>HEALTH.openHealthConnectSettings()});
+    refreshToday();
+  }catch(e){
+    const missing=String(e&&e.message||e).includes('unavailable');
+    openSheet(`<h2>Can't read Google Fit</h2><p>${missing?'Health Connect isn\'t on this phone. Install <b>Health Connect</b> from the Play Store, then try again.':'Walk needs permission to read steps, distance, calories and workouts. Allow them in Health Connect, then try again.'}</p>
+      <div class="row">${missing?'':'<button class="btn" id="hcSet">Open Health Connect</button>'}<button class="btn fill" onclick="closeSheet()">OK</button></div>`,()=>{const b=$('hcSet');if(b)b.onclick=()=>HEALTH.openHealthConnectSettings()});
+  }
+};
+
 // ---------- settings ----------
 $('setBtn').onclick=()=>openSheet(`<h2>About you</h2><p>Used to work out steps from distance and calories burned.</p>
   <label class="f">Height in cm<input id="sH" type="number" inputmode="decimal" value="${prefs.height}"></label>
@@ -412,6 +471,7 @@ $('setBtn').onclick=()=>openSheet(`<h2>About you</h2><p>Used to work out steps f
   setUI();startWatch();timer=setInterval(tick,1000);
   if(mapMissing){$('map').innerHTML='<p style="padding:90px 70px;color:#5E6E7D;text-align:center">The map needs internet to load. Tracking, steps and distance still work.</p>'}
   setTimeout(setPanelHeight,50);
+  refreshToday();setInterval(refreshToday,120000);
 })();
 </script>
 </body>
