@@ -33,6 +33,8 @@ jobs:
           EOF
           echo '{"appId":"com.walk.tracker","appName":"Walk","webDir":"www","android":{"useLegacyBridge":true}}' > capacitor.config.json
           npx cap add android
+          sed -i 's/minSdkVersion = 2[0-9]/minSdkVersion = 26/' android/variables.gradle
+          grep minSdk android/variables.gradle
           npx cap sync android
           cd android
           chmod +x gradlew
