@@ -20,29 +20,13 @@ jobs:
         run: |
           mkdir app && cd app
           npm init -y
-          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 leaflet@1.9.4
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor-community/background-geolocation@1.3.1 leaflet@1.9.4
           mkdir www
           cp ../walk.html www/index.html
           cp -r node_modules/leaflet/dist www/leaflet
           sed -i 's#https://unpkg.com/leaflet@1.9.4/dist/#leaflet/#g' www/index.html
-          npx cap init "Walk" com.walk.tracker --web-dir www
+          echo '{"appId":"com.walk.tracker","appName":"Walk","webDir":"www","android":{"useLegacyBridge":true}}' > capacitor.config.json
           npx cap add android
-          sed -i 's#</manifest>#    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n</manifest>#' android/app/src/main/AndroidManifest.xml
-          cat > android/app/src/main/java/com/walk/tracker/MainActivity.java <<'EOF'
-          package com.walk.tracker;
-
-          import android.os.Bundle;
-          import android.view.WindowManager;
-          import com.getcapacitor.BridgeActivity;
-
-          public class MainActivity extends BridgeActivity {
-              @Override
-              public void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-              }
-          }
-          EOF
           npx cap sync android
           cd android
           chmod +x gradlew

@@ -157,7 +157,7 @@ const mapMissing=typeof L==='undefined';
 if(mapMissing){const n=new Proxy(function(){},{get:(t,k)=>k==='then'?undefined:n,apply:()=>n});window.L=n}
 const map=L.map('map',{zoomControl:false,attributionControl:true}).setView([50.0755,14.4378],15);
 const ESRI='https://server.arcgisonline.com/ArcGIS/rest/services/';
-const streetLayer=L.tileLayer(ESRI+'World_Street_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:19,attribution:'Tiles © Esri, HERE, Garmin, OpenStreetMap'});
+const streetLayer=L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:20,subdomains:'abcd',attribution:'© OpenStreetMap © CARTO'});
 const satLayer=L.layerGroup([
   L.tileLayer(ESRI+'World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:19,attribution:'Imagery © Esri, Maxar'}),
   L.tileLayer(ESRI+'Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:19,opacity:.8}),
@@ -197,28 +197,60 @@ $('scrim').onclick=closeSheet;
 // ---------- GPS ----------
 function gpsStatus(acc){const g=$('gps');g.className='gps '+(acc==null?'':acc<=15?'good':acc<=35?'weak':'bad');
   $('gpsTxt').textContent=acc==null?'Finding you…':`GPS ±${Math.round(acc)} m`}
-function startWatch(){
+// GPS: native phone GPS inside the Android app (accurate, keeps working with the screen off),
+// browser GPS everywhere else.
+const BG=(()=>{try{const C=window.Capacitor;if(!C||!C.isNativePlatform||!C.isNativePlatform())return null;
+  return C.registerPlugin?C.registerPlugin('BackgroundGeolocation'):(C.Plugins&&C.Plugins.BackgroundGeolocation)||null}catch(e){return null}})();
+let watchBg=null;
+function gpsError(blocked){const g=$('gps');g.className='gps bad';
+  $('gpsTxt').textContent=blocked?'Location blocked':'No GPS signal';
+  if(blocked)openSheet(`<h2>Location is off</h2><p>${BG?'Allow location for Walk, and choose <b>Precise</b> location so your route is accurate.':'Allow location for this page in your browser settings, then reload.'}</p>
+    <div class="row">${BG?'<button class="btn" id="openSet">Open settings</button>':''}<button class="btn fill" onclick="closeSheet()">OK</button></div>`,()=>{const o=$('openSet');if(o)o.onclick=()=>{BG.openSettings();closeSheet()}});}
+async function startWatch(background=false){
+  if(BG){
+    if(watchId!=null&&watchBg===background)return;
+    if(watchId!=null){try{await BG.removeWatcher({id:watchId})}catch(e){}watchId=null}
+    const opts={requestPermissions:true,stale:false,distanceFilter:0};
+    if(background){opts.backgroundTitle='Recording your walk';opts.backgroundMessage='Walk is tracking your route. Finish the walk to stop.'}
+    watchBg=background;
+    watchId=await BG.addWatcher(opts,(loc,err)=>{
+      if(err){gpsError(err.code==='NOT_AUTHORIZED');return}
+      if(loc)onFix({lat:loc.latitude,lng:loc.longitude,acc:loc.accuracy,t:loc.time||Date.now()});
+    });
+    return;
+  }
   if(!('geolocation' in navigator)){$('gpsTxt').textContent='No GPS in this browser';return}
   if(watchId!=null)return;
-  watchId=navigator.geolocation.watchPosition(onFix,err=>{
-    const g=$('gps');g.className='gps bad';
-    $('gpsTxt').textContent=err.code===1?'Location blocked':'No GPS signal';
-    if(err.code===1)openSheet(`<h2>Location is off</h2><p>Allow location for this page in your browser settings, then reload. If you opened the file straight from Downloads and it still won't ask, the browser may block GPS for local files — open it from a web address instead.</p><button class="btn fill" style="width:100%" onclick="closeSheet()">OK</button>`);
-  },{enableHighAccuracy:true,maximumAge:0,timeout:20000});
+  watchId=navigator.geolocation.watchPosition(p=>onFix({lat:p.coords.latitude,lng:p.coords.longitude,acc:p.coords.accuracy,t:p.timestamp||Date.now()}),
+    err=>gpsError(err.code===1),{enableHighAccuracy:true,maximumAge:0,timeout:20000});
 }
+// Kalman filter: smooths GPS wobble so the route doesn't zig-zag while you walk straight.
+const KF={lat:null,lng:null,v:0,t:0,
+  reset(){this.lat=null},
+  step(lat,lng,acc,t){
+    acc=Math.max(acc,3);
+    if(this.lat==null){this.lat=lat;this.lng=lng;this.v=acc*acc;this.t=t;return[lat,lng]}
+    const dt=Math.max(0,(t-this.t)/1000);this.t=t;
+    this.v+=dt*1.5*1.5*4; // walking pace uncertainty (~1.5 m/s)
+    const k=this.v/(this.v+acc*acc);
+    this.lat+=k*(lat-this.lat);this.lng+=k*(lng-this.lng);this.v=(1-k)*this.v;
+    return[this.lat,this.lng];
+  }};
 function onFix(p){
-  const {latitude:lat,longitude:lng,accuracy:acc}=p.coords;const t=p.timestamp||Date.now();
+  const {lat,lng,acc,t}=p;
   gpsStatus(acc);
   const first=!lastFix;lastFix={lat,lng,acc,t};
   if(!meMarker){meMarker=L.marker([lat,lng],{icon:meIcon,interactive:false,zIndexOffset:1000}).addTo(map);accCircle=L.circle([lat,lng],{radius:acc,color:'#4285F4',weight:1,opacity:.3,fillOpacity:.12,interactive:false}).addTo(map)}
   else{meMarker.setLatLng([lat,lng]);accCircle.setLatLng([lat,lng]).setRadius(acc)}
   if(first)map.setView([lat,lng],17);else if(follow)map.panTo([lat,lng],{animate:true});
   if(state!=='running')return;
-  if(acc>35)return; // too vague to trust
-  const seg=W.segments[W.segments.length-1];const pt=[+lat.toFixed(6),+lng.toFixed(6),t];
+  const seg=W.segments[W.segments.length-1];
+  if(acc>(seg.length?30:20))return; // wait for a good fix before the first point, then skip vague ones
+  const [sl,sg]=KF.step(lat,lng,acc,t);
+  const pt=[+sl.toFixed(6),+sg.toFixed(6),t];
   if(!seg.length){seg.push(pt);drawRoute();save();return}
   const prev=seg[seg.length-1];const d=hav(prev,pt);const dt=(t-prev[2])/1000;
-  if(d<Math.max(3,acc*0.4))return;           // jitter while standing still
+  if(d<Math.max(2,acc*0.3))return;           // jitter while standing still
   if(dt>0&&d/dt>12)return;                   // impossible jump (>43 km/h)
   const before=W.dist;W.dist+=d;seg.push(pt);
   if(Math.floor(W.dist/1000)>Math.floor(before/1000))markKm(pt,Math.floor(W.dist/1000));
@@ -286,15 +318,15 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 
 $('go').onclick=async()=>{
   if(state==='idle'){
-    await startMotion();startWatch();
+    await startMotion();KF.reset();await startWatch(true);
     W={id:Date.now(),start:Date.now(),segments:[[]],moving:0,steps:0,sensorSteps:false,dist:0,kms:[],splits:[]};
     routeLayer.clearLayers();viewLayer.clearLayers();
     if(lastFix&&lastFix.acc<=35)W.segments[0].push([lastFix.lat,lastFix.lng,Date.now()]);
     state='running';lastTick=Date.now();keepAwake(true);toast('Walk started — keep the screen on');
   }else if(state==='running'){
-    W.moving+=Date.now()-lastTick;state='paused';keepAwake(false);
+    W.moving+=Date.now()-lastTick;state='paused';keepAwake(false);startWatch(false);
   }else{
-    W.segments.push([]);state='running';lastTick=Date.now();keepAwake(true);
+    W.segments.push([]);KF.reset();startWatch(true);state='running';lastTick=Date.now();keepAwake(true);
   }
   save();setUI();
 };
@@ -309,7 +341,7 @@ $('finish').onclick=()=>{
   });
 };
 function endWalk(keep){
-  const done=W;W=null;state='idle';keepAwake(false);store.set('walk-current',null);
+  const done=W;W=null;state='idle';keepAwake(false);startWatch(false);store.set('walk-current',null);
   if(keep&&done){done.end=Date.now();walks.unshift(done);store.set('walk-history',walks);showWalk(done)}
   else{closeSheet();routeLayer.clearLayers();toast('Walk discarded')}
   setUI();
